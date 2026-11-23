@@ -13,6 +13,24 @@ metadata:
 
 **核心顺序**：先定画布几何 → 再算体积预算 → 再按重要程度分配码率 → 逐段编码拼接 → 校验交付。顺序颠倒（先压再排版）会反复返工。
 
+## 快速开始
+
+以下命令在本 skill 目录下执行（`scripts/` 与 `SKILL.md` 同级）：
+
+```bash
+scripts/probe.sh <素材目录>                                    # 1. 侦察、算画布
+
+scripts/stitch.sh -s <素材目录> --budget 70MB                  # 2. 看预算
+
+scripts/stitch.sh -s <素材目录> -o out.mp4 \
+  -d 105 -c 30 -b 90:15:27 --max-bytes 70MB                    # 3. 拼接（末 15s 提质量）
+
+scripts/verify.sh out.mp4 --expect-duration 105 \
+  --max-bytes 70MB --frames 90,104 --seam 90                   # 4. 校验取证
+```
+
+需要手机兼容版时，同样的参数再加 `--scale 1348` 出一份低高度副本。
+
 ## 1. 先侦察素材
 
 ```bash
