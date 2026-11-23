@@ -87,3 +87,24 @@ MediaCodec 硬解 × 4  ──►  4 × SurfaceTexture(OES)
 - `MediaCodec.setParameters(KEY_VIDEO_BITRATE)` 在 Kirin 上可用，用来在末尾 15 秒提码率，不需要重启编码器。
 - `codec.createDecoderByType()` 失败（并发实例不够）时，遍历 `MediaCodecList` 找 `!isHardwareAccelerated()` 的解码器兜底。
 - 编码器输入是 Surface，PTS 用 `eglPresentationTimeANDROID` 设置；部分硬件编码器会按帧率重新计时，所以"帧数"才决定最终时长。
+
+### 目标体积：三个容易翻车的点
+
+移动端没有两遍编码，只能用「推码率 + 事后校验」，实测这三个坑必踩：
+
+1. **硬件编码器有码率下限**。目标 8MB / 105 秒时算出来 500kbps，编码器实际吐 20MB（+145%）。
+   解法：设一个"每像素码率"下限（如 0.008 bpp），低于它就别硬压，改为**降低输出分辨率**——
+   同一次实测：3076×2160@500kbps 出 20MB；降到 1722×1208 后出 7.7MB，目标达成。
+2. **给取证段提码率会抬高总码率**。目标很小时（均摊码率 <900kbps）应自动取消末尾提码率，
+   否则提的那一段会把总量顶上去。
+3. **留 15~18% 余量**。编码器实际输出普遍比请求值高 10%，按 0.82 的系数算目标码率，实测 70MB 目标出 63MB。
+
+### 失败路径必须显式记账
+
+`MediaCodec` 的编码器出错是"异步"的：`onError`、muxer 写失败、`signalEndOfInputStream` 后迟迟没有 EOS，
+都不会让 `run()` 抛异常。不记账的话，UI 会把 0 字节/截断的文件标成"拼接完成"。
+必须统计：`mEncoderError`、`mMuxerStarted`、`mSamplesWritten`、`renderedFrames`，任一不满足就报失败并删半成品。
+
+另外：进程被杀会留下**不在 MediaStore 里的孤儿文件**（行已回滚、文件还在，且没有 moov）。
+清理时不能只查 `IS_PENDING=1`（那时行已经没了），要扫目录 + 对比 MediaStore 记录；注意 targetSdk 29
+在 Android 10 上默认是分区存储，**File API 列不出 /sdcard 目录**，需要 `requestLegacyExternalStorage="true"`。
