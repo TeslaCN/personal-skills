@@ -7,6 +7,7 @@
 | Skill | 用途 |
 |---|---|
 | [`dashcam-video-stitching`](dashcam-video-stitching/SKILL.md) | 行车记录仪多视角视频无损拼接：ffmpeg 排版、体积预算、关键时段保车牌清晰、播放兼容性处理 |
+| [`video-bitrate-compression`](video-bitrate-compression/SKILL.md) | 视频码率压缩：保分辨率/兼容性的前提下压到体积上限内，bpp 预算、两遍编码、元数据 flag 不退化、质量校验 |
 
 ## 使用方式
 
