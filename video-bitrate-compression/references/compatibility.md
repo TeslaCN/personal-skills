@@ -81,3 +81,52 @@ done
 ### 一个反例
 
 源片是 8bit H.264 的 1080p，手机相册播放正常。重编码时如果不写 `-pix_fmt yuv420p`，滤镜链可能输出 `yuv444p` 或 10bit——文件在电脑上能放，手机相册直接黑屏。这类问题**只看文件大小和 ffprobe 是否成功是发现不了的**，必须看 `pix_fmt` 和 tag。
+
+## 重编码后"电脑流畅、手机卡"：B 帧 → 负 DTS → edit list 偏移
+
+这是最隐蔽的一类兼容性问题：分辨率、编码、码率、色彩全都对得上，文件也能正常解码，但手机上播放有掉帧感/节奏不对。
+
+### 成因链
+
+1. 源片（尤其行车记录仪、手机直出）通常用很简单的 GOP：**0~1 个 B 帧、1 个参考帧**，PTS == DTS。
+2. 重编码时 x264/x265 默认开 4 个 B 帧 + B-pyramid，编码顺序与显示顺序不一致，**第一个包的 DTS 变成负数**（如 -0.066s）。
+3. MP4 不允许负 DTS，ffmpeg 会写一条 **edit list（`elst`）** 把 `media_time` 偏移一个很大的值来补偿。
+4. 部分播放器/相册对 `elst` 处理不完善，于是起播位置、帧节奏、音画对齐出现偏差，表现出来就是"卡、掉帧"。
+
+### 诊断
+
+```bash
+# 1) 首包 DTS 是否为负
+ffprobe -v error -select_streams v:0 -show_entries packet=pts_time,dts_time -of csv=p=0 out.mp4 | head -5
+
+# 2) elst 的 media_time（源通常是 0，出问题的输出是个大数）
+#    用 python 解析 moov/trak/edts/elst，或 mediainfo 看 "编辑列表"
+```
+
+对比源片与输出的这几个字段，差异一目了然：
+
+| 字段 | 正常源片 | 出问题的输出 |
+|---|---|---|
+| `has_b_frames` | 0~1 | 4 |
+| 首包 DTS | 0 | -0.066s |
+| video elst `media_time` | 0 | 123155554（1/90000 单位下约 2.3 小时？实际按 timescale 换算成 0.066s） |
+| `time_base` | 1/1000000 | 1/1849000000 |
+| `compatible_brands` | isom iso2 **hvc1** mp41 | isom iso2 mp41（缺 hvc1） |
+
+### 修复参数
+
+```bash
+ffmpeg -i in.mp4 -c:v libx265 \
+  -x265-params "bframes=0:ref=1:keyint=90:min-keyint=45" \
+  -fps_mode cfr -r 30 \
+  -video_track_timescale 90000 \
+  -tag:v hvc1 -brand hvc1 \
+  -c:a copy -movflags +faststart out.mp4
+```
+
+- `bframes=0:ref=1`：解码顺序=显示顺序，无重排、无负 DTS（代价约 10% 压缩效率，换来最稳的播放）
+- `-fps_mode cfr -r N`：恒定帧率，帧间隔严格等于 1/N
+- `-video_track_timescale 90000`：时间基变成 90kHz，每帧 3000 tick，播放器不用做浮点换算
+- `-brand hvc1`：让 `compatible_brands` 里带上 hvc1（对齐 iPhone/相册的识别路径）
+
+验证：`has_b_frames=0`、首包 DTS=0、video elst `media_time=0`、帧间隔全部等于 1/N。
